@@ -15,6 +15,8 @@ https://github.com/user-attachments/assets/018738b8-af50-4a08-a7ac-1090b5b1f903
 ## Related Projects
 
 - [MuAPI](https://muapi.ai) — Unified API for image, video, and audio generation across hundreds of AI models. Try [AI Clipping](https://muapi.ai/playground/ai-clipping) and review the [specialized apps docs](https://muapi.ai/docs/specialized-apps).
+- [awesome-vibecoded-saas](https://github.com/Anil-matcha/awesome-vibecoded-saas) — broader catalog of open-source SaaS alternatives featuring this clipping studio.
+- [Muapi open-source alternatives](https://muapi.ai/open-source/alternative) — compare the clipping workflow with the paid tools it targets.
 - [ai-clipping-comfyui](https://github.com/Anil-matcha/ai-clipping-comfyui) — Same AI clipping capability as ComfyUI nodes
 - [AI-Youtube-Shorts-Generator](https://github.com/SamurAIGPT/AI-Youtube-Shorts-Generator) — Full open-source YouTube Shorts generator with virality ranking
 
