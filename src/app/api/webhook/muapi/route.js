@@ -1,58 +1,49 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { hashMuapiWebhookToken, verifyMuapiWebhookToken } from "@/lib/services/muapi-webhook";
 
 export async function POST(req) {
   try {
-    const data = await req.json();
-    const requestId = data.id || data.request_id;
+    const token = new URL(req.url).searchParams.get("token");
+    const tokenHash = hashMuapiWebhookToken(token);
+    if (!tokenHash) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-    if (!requestId) {
-      console.error("[MUAPI_WEBHOOK_ERROR] Missing request id in payload", data);
+    const data = await req.json();
+    const requestIdValue = data.id || data.request_id;
+    if (typeof requestIdValue !== "string" || !requestIdValue.trim()) {
       return NextResponse.json({ error: "Missing request id" }, { status: 400 });
     }
+    const requestId = requestIdValue.trim();
 
     const creation = await prisma.creation.findUnique({
-      where: { requestId }
+      where: { webhookTokenHash: tokenHash },
     });
-
-    if (!creation) {
-      console.warn(`[MUAPI_WEBHOOK] Creation with requestId ${requestId} not found.`);
-      return NextResponse.json({ error: "Creation not found" }, { status: 404 });
+    if (!creation || !verifyMuapiWebhookToken(token, creation.webhookTokenHash)) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+    if (creation.requestId && creation.requestId !== requestId) {
+      return NextResponse.json({ error: "Request id does not match this webhook token" }, { status: 409 });
+    }
+    if (creation.status !== "processing") {
+      return NextResponse.json({ success: true, message: "Already processed" });
     }
 
-    if (data.error && data.error !== "") {
-      await prisma.creation.update({
-        where: { id: creation.id },
-        data: {
-          status: "failed",
-          error: data.error
-        }
-      });
-    } else {
-      let mediaUrls = [];
-      
-      // MuAPI might return url, video_url or an outputs array depending on the endpoint
-      if (data.outputs && Array.isArray(data.outputs)) {
-        mediaUrls = data.outputs;
-      } else if (data.url) {
-        mediaUrls = [data.url];
-      } else if (data.video_url) {
-        mediaUrls = [data.video_url];
-      } else if (data.download_url) {
-        mediaUrls = [data.download_url];
-      }
-
-      await prisma.creation.update({
-        where: { id: creation.id },
-        data: {
+    const failed = data.status === "failed" || Boolean(data.error);
+    const errorMessage = typeof data.error === "string" ? data.error : (data.error ? JSON.stringify(data.error) : "Generation failed");
+    const resultData = failed
+      ? { requestId, status: "failed", error: errorMessage }
+      : {
+          requestId,
           status: "completed",
-          resultUrl: JSON.stringify(mediaUrls),
-        }
-      });
-    }
+          error: null,
+          resultUrl: JSON.stringify(Array.isArray(data.outputs) ? data.outputs : data.url ? [data.url] : data.video_url ? [data.video_url] : data.download_url ? [data.download_url] : []),
+        };
 
-    return NextResponse.json({ success: true });
-
+    const updated = await prisma.creation.updateMany({
+      where: { id: creation.id, status: "processing", requestId: creation.requestId },
+      data: resultData,
+    });
+    return NextResponse.json({ success: true, message: updated.count === 1 ? "Processed" : "Already processed" });
   } catch (error) {
     console.error("[MUAPI_WEBHOOK_ERROR]", error);
     return NextResponse.json({ error: "Internal Server Error" }, { status: 500 });

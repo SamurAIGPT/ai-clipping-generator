@@ -1,6 +1,7 @@
 import { prisma } from "@/lib/prisma";
 import { UserService } from "./user";
 import config from "@/lib/config";
+import { buildMuapiWebhookUrl, createMuapiWebhookToken, hashMuapiWebhookToken } from "./muapi-webhook";
 
 /**
  * Service to manage AICLIP generations using muapi.ai
@@ -58,7 +59,20 @@ export const AIService = {
     const apiKey = isUsingCustomKey ? customApiKey.trim() : (config.ai.aiclips.apiKey || config.ai.apiKey);
     if (!apiKey) throw new Error("API Key is not configured");
 
-    const webhookUrl = `${config.auth.webhook_url}/api/webhook/muapi`;
+    const creationModel = prisma.creation || prisma.Creation;
+    if (!creationModel) throw new Error("Creation model is not available");
+    const webhookToken = createMuapiWebhookToken();
+    const creation = await creationModel.create({
+      data: {
+        userId,
+        type: "youtube_download",
+        resolution: format,
+        status: "processing",
+        webhookTokenHash: hashMuapiWebhookToken(webhookToken),
+      }
+    });
+
+    const webhookUrl = buildMuapiWebhookUrl(config.auth.webhook_url, webhookToken);
     const submitUrl = `${config.ai.aiclips.youtubeEndpoint}?webhook=${encodeURIComponent(webhookUrl)}`;
     
     const submitRes = await fetch(submitUrl, {
@@ -75,6 +89,7 @@ export const AIService = {
 
     if (!submitRes.ok) {
       const errorText = await submitRes.text();
+      await creationModel.deleteMany({ where: { id: creation.id, status: "processing", requestId: null } });
       throw new Error(`YouTube Download Failed: ${submitRes.status} ${errorText}`);
     }
 
@@ -83,37 +98,27 @@ export const AIService = {
 
     if (!requestId) throw new Error("No request_id received from API");
 
-    const creationModel = prisma.creation || prisma.Creation;
-    if (creationModel) {
-      // Check if already completed/failed in initial response
-      const isCompleted = data.status === "completed" || data.status === "succeeded";
-      const isFailed = data.status === "failed";
-      
-      let mediaUrls = [];
-      if (isCompleted) {
-        if (data.outputs && Array.isArray(data.outputs)) mediaUrls = data.outputs;
-        else if (data.url) mediaUrls = [data.url];
-        else if (data.video_url) mediaUrls = [data.video_url];
-      }
-
-      await creationModel.create({
-        data: {
-          userId,
-          type: "youtube_download",
-          resolution: format,
-          requestId: requestId,
-          status: isCompleted ? "completed" : (isFailed ? "failed" : "processing"),
-          resultUrl: isCompleted ? JSON.stringify(mediaUrls) : null,
-          error: isFailed ? (data.error || "Generation failed") : null
-        }
-      });
-
-      if (isCompleted) {
-        return { request_id: requestId, status: "completed", clips: mediaUrls };
-      }
+    const isCompleted = data.status === "completed" || data.status === "succeeded";
+    const isFailed = data.status === "failed" || Boolean(data.error);
+    let mediaUrls = [];
+    if (isCompleted) {
+      if (data.outputs && Array.isArray(data.outputs)) mediaUrls = data.outputs;
+      else if (data.url) mediaUrls = [data.url];
+      else if (data.video_url) mediaUrls = [data.video_url];
     }
-    
-    return { request_id: requestId, status: "processing" };
+
+    await creationModel.updateMany({
+      where: { id: creation.id, status: "processing" },
+      data: {
+        requestId,
+        status: isCompleted ? "completed" : (isFailed ? "failed" : "processing"),
+        resultUrl: isCompleted ? JSON.stringify(mediaUrls) : null,
+        error: isFailed ? (data.error || "Generation failed") : null,
+      }
+    });
+
+    if (isCompleted) return { request_id: requestId, status: "completed", clips: mediaUrls };
+    return { request_id: requestId, status: isFailed ? "failed" : "processing" };
   },
 
   /**
@@ -131,7 +136,21 @@ export const AIService = {
     const apiKey = isUsingCustomKey ? customApiKey.trim() : (config.ai.aiclips.apiKey || config.ai.apiKey);
     if (!apiKey) throw new Error("API Key is not configured");
 
-    const webhookUrl = `${config.auth.webhook_url}/api/webhook/muapi`;
+    const creationModel = prisma.creation || prisma.Creation;
+    if (!creationModel) throw new Error("Creation model is not available");
+    const webhookToken = createMuapiWebhookToken();
+    const creation = await creationModel.create({
+      data: {
+        userId,
+        type: "ai_clipping",
+        aspectRatio: aspect_ratio,
+        numClips: numHighlights,
+        status: "processing",
+        webhookTokenHash: hashMuapiWebhookToken(webhookToken),
+      }
+    });
+
+    const webhookUrl = buildMuapiWebhookUrl(config.auth.webhook_url, webhookToken);
     const submitUrl = `${config.ai.aiclips.clippingEndpoint}?webhook=${encodeURIComponent(webhookUrl)}`;
     
     const submitRes = await fetch(submitUrl, {
@@ -149,6 +168,7 @@ export const AIService = {
 
     if (!submitRes.ok) {
       const errorText = await submitRes.text();
+      await creationModel.deleteMany({ where: { id: creation.id, status: "processing", requestId: null } });
       throw new Error(`AI Clipping Failed: ${submitRes.status} ${errorText}`);
     }
 
@@ -157,35 +177,23 @@ export const AIService = {
 
     if (!request_id) throw new Error("No request_id received from API");
 
-    const creationModel = prisma.creation || prisma.Creation;
-    if (creationModel) {
-      const isCompleted = data.status === "completed" || data.status === "succeeded";
-      const isFailed = data.status === "failed";
-      
-      let mediaUrls = [];
-      if (isCompleted) {
-        if (data.outputs && Array.isArray(data.outputs)) mediaUrls = data.outputs;
+    const isCompleted = data.status === "completed" || data.status === "succeeded";
+    const isFailed = data.status === "failed" || Boolean(data.error);
+    let mediaUrls = [];
+    if (isCompleted && data.outputs && Array.isArray(data.outputs)) mediaUrls = data.outputs;
+
+    await creationModel.updateMany({
+      where: { id: creation.id, status: "processing" },
+      data: {
+        requestId: request_id,
+        status: isCompleted ? "completed" : (isFailed ? "failed" : "processing"),
+        resultUrl: isCompleted ? JSON.stringify(mediaUrls) : null,
+        error: isFailed ? (data.error || "Generation failed") : null,
       }
+    });
 
-      await creationModel.create({
-        data: {
-          userId,
-          type: "ai_clipping",
-          aspectRatio: aspect_ratio,
-          numClips: parseInt(num_highlights),
-          requestId: request_id,
-          status: isCompleted ? "completed" : (isFailed ? "failed" : "processing"),
-          resultUrl: isCompleted ? JSON.stringify(mediaUrls) : null,
-          error: isFailed ? (data.error || "Generation failed") : null
-        }
-      });
-
-      if (isCompleted) {
-        return { request_id: request_id, status: "completed", clips: mediaUrls };
-      }
-    }
-
-    return { request_id };
+    if (isCompleted) return { request_id, status: "completed", clips: mediaUrls };
+    return { request_id, status: isFailed ? "failed" : "processing" };
   },
 
   /**
