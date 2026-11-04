@@ -89,7 +89,7 @@ Before deploying this update, run `npx prisma db push` to add the nullable `Crea
 ```bash
 # 1. Clone the repository
 git clone https://github.com/SamurAIGPT/ai-clipping-generator
-cd aiclips-generator
+cd ai-clipping-generator
 
 # 2. Install dependencies
 npm install
